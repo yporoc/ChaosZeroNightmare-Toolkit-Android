@@ -1,0 +1,14 @@
+Third-party components
+======================
+
+- zstd v1.5.6 (native/zstd-lib/, C sources only)
+  Copyright (c) Meta Platforms, Inc. and affiliates.
+  Dual licensed under the BSD License and GPLv2.
+  https://github.com/facebook/zstd
+
+- OpenCC conversion data via opencc4j (dependency, see gradle/libs.versions.toml)
+- Shizuku API (dev.rikka.shizuku:api / provider, dependency)
+- Jetpack Compose / AndroidX (dependencies)
+
+All other third-party dependencies and their licenses are declared in
+gradle/libs.versions.toml and resolved from Maven Central / Google Maven.

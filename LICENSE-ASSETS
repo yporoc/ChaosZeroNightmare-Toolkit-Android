@@ -1,0 +1,17 @@
+# 资产许可 / Asset License
+
+本仓库中的美术资产——`app/src/main/res/mipmap-*/` 目录下的全部图片文件
+（应用图标与自适应图标图层）——以
+**Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+（CC BY-NC-SA 4.0）** 授权。
+
+The image assets under `app/src/main/res/mipmap-*/` (application icon and its
+adaptive icon layers) are licensed under the **Creative Commons
+Attribution-NonCommercial-ShareAlike 4.0 International** license
+(CC BY-NC-SA 4.0).
+
+https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+代码部分以 GNU General Public License v3.0 授权，见 `LICENSE`。
+The source code is licensed under the GNU General Public License v3.0,
+see `LICENSE`.
