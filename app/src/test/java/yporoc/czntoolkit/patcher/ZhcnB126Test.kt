@@ -34,14 +34,7 @@ class ZhcnB126Test {
     }
 
     private fun injectZstdJni() {
-        ZstdCodec.compress = { data, maxSize ->
-            var out: ByteArray? = null
-            for (lvl in intArrayOf(3, 6, 9, 12, 16, 19)) {
-                val c = Zstd.compress(data, lvl)
-                if (c.size <= maxSize) { out = c; break }
-            }
-            out ?: error("所有压缩级别均超过原帧尺寸（maxSize=$maxSize）")
-        }
+        ZstdCodec.compressAtLevel = { data, level -> Zstd.compress(data, level) }
         ZstdCodec.decompress = { blob, maxOut -> Zstd.decompress(blob, maxOut) }
     }
 

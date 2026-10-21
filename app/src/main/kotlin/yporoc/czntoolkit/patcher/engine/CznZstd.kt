@@ -15,13 +15,9 @@ object CznZstd {
         loaded = true
     }
 
-    /** 依次尝试压缩级别，返回首个 ≤ maxSize 的标准 zstd 帧；全部超限则抛异常。 */
-    fun compressWithLimit(data: ByteArray, maxSize: Int): ByteArray {
-        for (lvl in intArrayOf(3, 6, 9, 12, 16, 19)) {
-            nativeCompress(data, lvl)?.let { if (it.size <= maxSize) return it }
-        }
-        throw IllegalStateException("所有压缩级别均超过原帧尺寸（maxSize=$maxSize）")
-    }
+    /** 单档压缩，返回标准 zstd 帧；选哪一档由 SsraEngine 的余量规则决定。 */
+    fun compressAtLevel(data: ByteArray, level: Int): ByteArray =
+        checkNotNull(nativeCompress(data, level)) { "zstd 压缩失败（level=$level）" }
 
     fun decompress(data: ByteArray, maxOut: Int): ByteArray =
         checkNotNull(nativeDecompress(data, maxOut)) { "zstd decompress 失败" }

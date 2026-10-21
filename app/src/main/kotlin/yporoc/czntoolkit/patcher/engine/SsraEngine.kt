@@ -16,8 +16,13 @@ object SsraEngine {
     const val ETAG_REL = "manifest.ssra.etag"
     const val PREV_REL = "manifest.ssra.prev"
     const val BACKUP_DIR = "czn_backup_original"
+
+    /** 压缩档位表：由引擎持有；选取规则是"首个余量为 0 或 >=8 的档"，注入的 codec 只负责单档压缩。 */
+    val COMPRESS_LEVELS = intArrayOf(3, 6, 9, 12, 16, 19)
+
     private val ZSTD_MAGIC = byteArrayOf(0x28, 0xB5.toByte(), 0x2F, 0xFD.toByte())
     private val SSRC_MAGIC = "SSRC".toByteArray()
+    private val SKIPPABLE_MAGIC = byteArrayOf(0x50, 0x2A, 0x4D, 0x18)
 
     class ConvertStats {
         var converted = 0
@@ -56,6 +61,8 @@ object SsraEngine {
         val fileCount: Int,
         val textdbFound: Boolean,
         val textdbPart: String,
+        /** 清单推导出的繁中卷名（不写死）。 */
+        val partName: String,
         val etagMatch: Boolean,
         val partFooterOk: Boolean,
         val writeOk: Boolean,
@@ -66,7 +73,6 @@ object SsraEngine {
 
     fun detect(gameres: File): DetectInfo {
         val manF = File(gameres, "manifest.ssra")
-        val partF = File(gameres, "chunks/$TARGET_PART")
         val etagF = File(gameres, ETAG_REL)
         var manifestOk = false
         var manifestError: String? = null
@@ -77,6 +83,7 @@ object SsraEngine {
         var textdbPart = ""
         var etagMatch = false
         var partFooterOk = false
+        var partName = ""
         try {
             val man = SsraManifest(gameres)
             manifestOk = true
@@ -87,7 +94,8 @@ object SsraEngine {
             if (rec != null) {
                 val seg = man.groupSegs.getValue(rec.grp).firstOrNull { rec.off >= it.start && rec.off < it.end }
                 textdbPart = seg?.let { man.partNames[it.k] } ?: ""
-                textdbFound = textdbPart == TARGET_PART
+                partName = textdbPart
+                textdbFound = textdbPart.isNotEmpty() && File(gameres, "chunks/$textdbPart").isFile
             }
             if (etagF.isFile && manF.isFile) {
                 val (lines, _) = parseEtag(etagF.readBytes())
@@ -97,8 +105,9 @@ object SsraEngine {
                         lines[3] == manBytes.size.toString()
                 }
             }
-            if (partF.isFile && partF.length() > 16) {
-                partFooterOk = verifyPartFooter(partF)
+            val pf = if (partName.isNotEmpty()) File(gameres, "chunks/$partName") else null
+            if (pf != null && pf.isFile && pf.length() > 16) {
+                partFooterOk = verifyPartFooter(pf)
             }
         } catch (t: Throwable) {
             manifestError = t.message ?: t.toString()
@@ -114,10 +123,10 @@ object SsraEngine {
         return DetectInfo(
             gameres = gameres,
             manifestExists = manF.isFile,
-            partExists = partF.isFile,
+            partExists = partName.isNotEmpty() && File(gameres, "chunks/$partName").isFile,
             etagExists = etagF.isFile,
             manifestSize = manF.length(),
-            partSize = partF.length(),
+            partSize = if (partName.isNotEmpty()) File(gameres, "chunks/$partName").length() else 0L,
             etagSize = etagF.length(),
             manifestOk = manifestOk,
             manifestError = manifestError,
@@ -126,6 +135,7 @@ object SsraEngine {
             fileCount = fileCount,
             textdbFound = textdbFound,
             textdbPart = textdbPart,
+            partName = partName,
             etagMatch = etagMatch,
             partFooterOk = partFooterOk,
             writeOk = writeOk,
@@ -159,21 +169,55 @@ object SsraEngine {
         val man = SsraManifest(gameres)
         log("manifest build=${man.build} parts=${man.partCount} files=${man.fileCount}")
         val f = man.record(TEXT_DB)
-        val seg = man.segmentContaining(f.grp, f.off)
+        if (f.meth != 1) {
+            error(
+                "$TEXT_DB 的压缩方法变成 meth=${f.meth}（不再是 zstd 帧），等长垫帧的打法不适用；" +
+                    "要先搞清新的封装方式才能继续",
+            )
+        }
+        val seg = man.locateSegment(f.grp, f.off)
         val partName = man.partNames[seg.k]
-        check(partName == TARGET_PART) { "text.db 所在分卷为 $partName，非 $TARGET_PART" }
+        if (partName != TARGET_PART) {
+            log("提示: $TEXT_DB 现在在 $partName 卷里（历史卷名 $TARGET_PART），已按清单动态处理")
+        }
+        if (f.off + f.comp > seg.end) {
+            error(
+                "$TEXT_DB 跨了分卷边界（结束 ${f.off + f.comp} > 卷内上界 ${seg.end}），等长改写不成立；" +
+                    "这一版需要整组重建分卷，本工具未实现该路径",
+            )
+        }
         val partFile = File(gameres, "chunks/$partName")
+        if (!partFile.isFile) {
+            error("分卷不在盘上：${partFile.absolutePath}\n请先启动游戏把繁中资源下完，再做繁转简")
+        }
         val origPart = partFile.readBytes()
         val local = (f.off - seg.start).toInt()
-        check(local + 4 <= origPart.size) { "text.db 帧入口越界" }
-        check((0 until 4).all { origPart[local + it] == ZSTD_MAGIC[it] }) { "text.db 入口不是 zstd 帧" }
-        check(
-            (local + f.comp.toInt() until origPart.size - 16).all { it >= origPart.size || origPart[it] == 0.toByte() }
-        ) { "text.db 不是该卷最后条目" }
+        if (local + 4 > origPart.size) {
+            error(
+                "$TEXT_DB 的卷内偏移 $local 加上 4 字节帧头已越过卷尾（卷长 ${origPart.size}），" +
+                    "清单与磁盘对不上，请先让游戏更新一轮资源",
+            )
+        }
+        if ((0 until 4).any { origPart[local + it] != ZSTD_MAGIC[it] }) {
+            error(
+                "$TEXT_DB 在卷内偏移 $local 处不是 zstd 帧头（实得 ${hexOf(origPart, local, 4)}，" +
+                    "期望 ${hexOf(ZSTD_MAGIC, 0, 4)}），官方改了条目封装方式，需要重新逆向",
+            )
+        }
+        val gapNonZero = (local + f.comp.toInt() until origPart.size - 16).count { origPart[it] != 0.toByte() }
+        if (gapNonZero > 0) {
+            error(
+                "$TEXT_DB 之后同一卷里还有别的内容（实测 $gapNonZero 个非零字节），改它的长度会挤动后续条目；" +
+                    "这一版需要整组重建分卷，本工具未实现该路径",
+            )
+        }
 
         val enc = man.extract(f, decrypt = false)
         val phase = InnerXor.findPhase(enc.copyOfRange(0, minOf(64, enc.size)))
-            ?: error("未找到内层 XOR 相位")
+            ?: error(
+                "在 $TEXT_DB 明文头里找不到内层 XOR 相位（前 16 字节 ${hexOf(enc, 0, 16)}），" +
+                    "官方改了 .db 的加密方式，需要重新逆向",
+            )
         InnerXor.transformInPlace(enc, phase) // 就地解密，enc 现为明文
         log("text.db 解密: phase=$phase size=${enc.size}")
 
@@ -225,15 +269,42 @@ object SsraEngine {
         log("自检通过: ${re.entries.size} 条，键集/桶分配/值全部一致")
         if (newValues.isEmpty()) log("官方 text.db 已全部为简体，无需转换（生成的补丁与官方内容一致）")
 
-        check(newdb.size.toLong() == f.dec) {
-            "转换改变了 text.db 尺寸（${newdb.size} != ${f.dec}），会破坏分卷尺寸一致性"
+        if (newdb.size.toLong() != f.dec) {
+            val grow = newValues.filterKeys { i -> newValues.getValue(i).size != parsed.entries[i].value.size }
+            error(
+                "转换后 text.db 尺寸变了 ${newdb.size - f.dec} 字节（${f.dec} -> ${newdb.size}），" +
+                    "其中 ${grow.size} 条值的字节长度被转换器改动；等长改写不成立，得先定新的填充策略",
+            )
         }
 
-        // 压回存储态（就地加密），用注入的真实 zstd 压缩器（输出为标准 zstd 帧）
+        // 压回存储态（就地加密）
         InnerXor.transformInPlace(newdb, phase)
-        val compress = ZstdCodec.requireCompress()
-        val cand = compress(newdb, f.comp.toInt())
-        log("zstd 压缩: ${cand.size}B ≤ ${f.comp}B")
+        // 分卷必须与官方逐字节同尺寸：CDN 上分卷尺寸固定，更新器按清单声明的尺寸发 Range 请求，
+        // 一旦超出官方 EOF 就是 HTTP 416 死循环。所以帧压到不超过原 comp，再用 zstd skippable
+        // frame 垫满。skippable frame 自己占 8 字节头 ⇒ 余量只能是 0 或 >=8，1~7 要换档而不是硬垫。
+        val compressAtLevel = ZstdCodec.requireCompressAtLevel()
+        var chosen: ByteArray? = null
+        var frameLevel = -1
+        var padTotal = 0
+        val tried = ArrayList<String>()
+        for (lvl in COMPRESS_LEVELS) {
+            val cand = compressAtLevel(newdb, lvl)
+            val pad = f.comp - cand.size
+            tried.add("$lvl:${if (pad >= 0) "+" else ""}$pad")
+            if (chosen == null && (pad == 0L || pad >= 8L)) {
+                chosen = cand
+                frameLevel = lvl
+                padTotal = pad.toInt()
+            }
+        }
+        if (chosen == null) {
+            error(
+                "简体内容压不进官方帧尺寸（各档余量 ${tried.joinToString(" ")}，需要 0 或 >=8 字节），" +
+                    "等长改写不成立，得整组重建分卷",
+            )
+        }
+        val cand = chosen
+        log("zstd 压缩: 档=$frameLevel ${cand.size}B ≤ ${f.comp}B（余量 $padTotal；各档 ${tried.joinToString(" ")}）")
         check(cand.size.toLong() <= f.comp) { "压缩帧超过原帧尺寸（${cand.size} > ${f.comp}）" }
 
         // 数据帧回读校验（垫帧前）
@@ -242,14 +313,17 @@ object SsraEngine {
         check(back.size == newdb.size && back.contentEquals(newdb)) { "压缩回读不一致" }
 
         // zstd skippable frame 垫满到与官方帧完全同尺寸
-        val padTotal = (f.comp - cand.size).toInt()
-        var frame = cand
+        if (padTotal in 1..7) {
+            error("内部不变式被破坏：余量 $padTotal 落不下 8 字节帧头（档位循环应已排除此情形）")
+        }
+        var padded = cand
         if (padTotal > 0) {
             val n = padTotal - 8
-            frame = cand.copyOf(cand.size + padTotal)
-            byteArrayOf(0x50, 0x2A, 0x4D, 0x18).copyInto(frame, cand.size)
-            Le.put32(frame, cand.size + 4, n)
+            padded = cand.copyOf(cand.size + padTotal)
+            SKIPPABLE_MAGIC.copyInto(padded, cand.size)
+            Le.put32(padded, cand.size + 4, n)
         }
+        val frame = padded
         check(frame.size.toLong() == f.comp) { "帧尺寸不等于原压缩尺寸" }
 
         // 组装新分卷：原载荷替换帧段，重算 SSRC footer
@@ -294,6 +368,10 @@ object SsraEngine {
         out[3] = manifest.size.toString()
         return out.joinToString(sep).toByteArray(Charsets.UTF_8)
     }
+
+    /** 取一段字节的十六进制表示，停机消息里要给出实得值。 */
+    private fun hexOf(data: ByteArray, off: Int, len: Int): String =
+        (off until minOf(off + len, data.size)).joinToString(" ") { "%02x".format(data[it]) }
 
     /** etag 解析：检测 CRLF 或 LF，返回行列表与所用分隔符。 */
     fun parseEtag(data: ByteArray): Pair<List<String>, String> {

@@ -43,19 +43,12 @@ class GoldenTest {
 
     /** PC 端注入 zstd-jni（Windows .so）压缩器；真机由服务注入 cznfast（bionic zstd）。同为标准 zstd 帧。 */
     private fun injectCompressor() {
-        ZstdCodec.compress = { data, maxSize -> compressWithLevels(data, maxSize) }
+        ZstdCodec.compressAtLevel = { data, level -> com.github.luben.zstd.Zstd.compress(data, level) }
         ZstdCodec.decompress = { blob, maxOut ->
             com.github.luben.zstd.ZstdInputStream(java.io.ByteArrayInputStream(blob)).use { it.readNBytes(maxOut) }
         }
     }
 
-    private fun compressWithLevels(data: ByteArray, maxSize: Int): ByteArray {
-        for (lvl in intArrayOf(3, 6, 9, 12, 16, 19)) {
-            val c = com.github.luben.zstd.Zstd.compress(data, lvl)
-            if (c.size <= maxSize) return c
-        }
-        throw IllegalStateException("所有压缩级别均超过原帧尺寸（maxSize=$maxSize）")
-    }
 
     private fun assertSelfConsistent(res: SsraEngine.BuildResult, gameres: File) {
         // 分卷 footer：SSRC + 卷号 + XXH64(payload)

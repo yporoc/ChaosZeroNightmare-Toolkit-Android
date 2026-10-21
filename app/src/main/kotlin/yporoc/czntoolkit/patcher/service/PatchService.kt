@@ -73,7 +73,7 @@ class PatchService : IPatchService.Stub {
     override fun build(gameresPath: String?, onLog: IProgressCallback?): Bundle = try {
         Log.i(TAG, "build start [$BUILD_ID]: $gameresPath")
         CznZstd.load()
-        ZstdCodec.compress = { data, maxSize -> CznZstd.compressWithLimit(data, maxSize) }
+        ZstdCodec.compressAtLevel = { data, level -> CznZstd.compressAtLevel(data, level) }
         ZstdCodec.decompress = { blob, maxOut -> CznZstd.decompress(blob, maxOut) }
         Log.i(TAG, "cznfast (bionic zstd) loaded")
         val res = SsraEngine.build(File(checkNotNull(gameresPath))) { line ->
