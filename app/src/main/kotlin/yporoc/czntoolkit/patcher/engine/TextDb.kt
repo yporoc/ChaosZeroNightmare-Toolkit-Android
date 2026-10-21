@@ -2,7 +2,8 @@ package yporoc.czntoolkit.patcher.engine
 
 /**
  * PLPcK v1 文本库解析/重建（移植自 ssra_zhcn.py 的 parse_textdb / rebuild_textdb）。
- * 结构：43B 头 + 哈希桶表(每桶 5B，40 位链头) + 条目链(15B 头 + key + value)。
+ * 结构：43B 头 + 哈希桶表(每桶 5B，40 位链头) + 条目链(15B 头 + key + value) + 官方尾部页脚。
+ * 页脚从 build 126 起出现（实测 38B，PLPcK 魔数 + 条目数 + 桶数），build 84/88 为 0B，必须原样搬运。
  */
 internal object TextDb {
     private val MAGIC = "PLPcK".toByteArray()
@@ -14,6 +15,8 @@ internal object TextDb {
         val hashCount: Int,
         val buckets: Array<IntArray>,
         val entries: List<Entry>,
+        /** 最后一个条目结束之后、明文结尾之前的原样字节（官方页脚，可能是 0 长度）。 */
+        val tail: ByteArray,
     )
 
     fun parse(data: ByteArray): Parsed {
@@ -51,17 +54,25 @@ internal object TextDb {
             bucketLists.add(lst)
         }
         check(bucketLists.sumOf { it.size } == entries.size) { "链覆盖不完整" }
+        var bodyEnd = 0L
+        for (e in entries) {
+            val end = e.origOff + 15 + e.key.size + e.value.size
+            if (end > bodyEnd) bodyEnd = end
+        }
+        if (entries.isEmpty()) bodyEnd = data.size.toLong()
+        check(bodyEnd <= data.size) { "条目区结束位置越界: $bodyEnd > ${data.size}" }
         return Parsed(
             header = data.copyOfRange(0, 43),
             hashCount = hashCount,
             buckets = bucketLists.map { it.toIntArray() }.toTypedArray(),
             entries = entries,
+            tail = data.copyOfRange(bodyEnd.toInt(), data.size),
         )
     }
 
     /**
      * 重建：按原始物理顺序写出条目（保证桶链 40 位偏移可回填），
-     * 桶分配与键集不变，值按 newValues 替换。
+     * 桶分配与键集不变，值按 newValues 替换，尾部原样字节 [tail] 带回。
      */
     fun rebuild(
         header: ByteArray,
@@ -69,6 +80,7 @@ internal object TextDb {
         buckets: Array<IntArray>,
         entries: List<Entry>,
         newValues: Map<Int, ByteArray>,
+        tail: ByteArray,
     ): ByteArray {
         val headerLen = 43 + hashCount * 5
         val nxt = HashMap<Int, Int>()
@@ -104,9 +116,10 @@ internal object TextDb {
             body[o] = ((p shr 32) and 0xFFL).toByte()
             Le.put32(body, o + 1, (p and 0xFFFFFFFFL).toInt())
         }
-        val out = ByteArray(headerLen + body.size)
+        val out = ByteArray(headerLen + body.size + tail.size)
         header.copyInto(out)
         body.copyInto(out, headerLen)
+        tail.copyInto(out, headerLen + body.size)
         for (b in buckets.indices) {
             val lst = buckets[b]
             if (lst.isNotEmpty()) {

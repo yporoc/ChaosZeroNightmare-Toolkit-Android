@@ -178,10 +178,32 @@ object SsraEngine {
         log("text.db 解密: phase=$phase size=${enc.size}")
 
         val parsed = TextDb.parse(enc)
+        // 重建自证：一条都不转也必须逐字节还原官方明文，否则后面所有产出都不可信
+        val identity = TextDb.rebuild(
+            parsed.header, parsed.hashCount, parsed.buckets, parsed.entries, emptyMap(), parsed.tail,
+        )
+        if (!identity.contentEquals(enc)) {
+            var diff = 0
+            var first = -1
+            val n = minOf(identity.size, enc.size)
+            for (i in 0 until n) {
+                if (identity[i] != enc[i]) {
+                    if (first < 0) first = i
+                    diff++
+                }
+            }
+            error(
+                "重建器无法逐字节还原官方 text.db（差异 $diff 字节，首处 @$first，" +
+                    "长度 ${identity.size} vs ${enc.size}），结构假设已失效，不能继续构建补丁",
+            )
+        }
+        log("重建自证通过: 尾部原样字节 ${parsed.tail.size}")
         val stats = ConvertStats()
         val newValues = convertValues(parsed.entries, stats)
         log("转换统计: ${stats.summary()}")
-        val newdb = TextDb.rebuild(parsed.header, parsed.hashCount, parsed.buckets, parsed.entries, newValues)
+        val newdb = TextDb.rebuild(
+            parsed.header, parsed.hashCount, parsed.buckets, parsed.entries, newValues, parsed.tail,
+        )
 
         // 自检：键集 / 桶分配 / 值逐条一致
         val re = TextDb.parse(newdb)
@@ -336,7 +358,7 @@ object SsraEngine {
 
     // ───────────────────────── conversion ─────────────────────────
 
-    private fun convertValues(entries: List<TextDb.Entry>, stats: ConvertStats): Map<Int, ByteArray> {
+    internal fun convertValues(entries: List<TextDb.Entry>, stats: ConvertStats): Map<Int, ByteArray> {
         val out = HashMap<Int, ByteArray>()
         for ((i, e) in entries.withIndex()) {
             val v = e.value
