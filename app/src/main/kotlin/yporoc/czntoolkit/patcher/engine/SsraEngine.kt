@@ -14,7 +14,6 @@ object SsraEngine {
     const val TEXT_DB = "text/zht/text.db"
     const val TARGET_PART = "lang_zht_b03_0.ssrc"
     const val ETAG_REL = "manifest.ssra.etag"
-    const val PREV_REL = "manifest.ssra.prev"
     const val BACKUP_DIR = "czn_backup_original"
 
     /** 压缩档位表：由引擎持有；选取规则是"首个余量为 0 或 >=8 的档"，注入的 codec 只负责单档压缩。 */
@@ -410,8 +409,7 @@ object SsraEngine {
         log("应用 chunks/${res.partName}")
         File(gameres, ETAG_REL).writeBytes(res.etag)
         log("同步 ${ETAG_REL}")
-        File(gameres, PREV_REL).writeBytes(res.manifest)
-        log("写入 $PREV_REL")
+        // 不碰 manifest.ssra.prev：那是更新器自己维护的上一版清单，盖上去会让差分合成拿到假基线
     }
 
     fun restore(gameres: File, onLog: (String) -> Unit = {}) {
@@ -426,11 +424,6 @@ object SsraEngine {
             check(src.isFile) { "缺少备份: ${src.absolutePath}" }
             src.copyTo(dst, overwrite = true)
             onLog("还原 $bak")
-        }
-        val prev = File(gameres, PREV_REL)
-        if (prev.isFile) {
-            prev.delete()
-            onLog("移除 $PREV_REL")
         }
     }
 

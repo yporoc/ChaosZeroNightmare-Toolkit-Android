@@ -14,7 +14,7 @@ interface IPatchService {
     /** 构建补丁（结果保留在服务进程内存，等待 apply）。onLog 可为 null。 */
     Bundle build(String gameresPath, IProgressCallback onLog);
 
-    /** 应用补丁：备份原文件 → 写入 manifest/分卷/etag → 写 prev。 */
+    /** 应用补丁：备份原文件 → 写入 manifest/分卷 → 同步 etag 身份记录。 */
     Bundle apply(String gameresPath);
 
     /** 从备份还原官方繁中。 */

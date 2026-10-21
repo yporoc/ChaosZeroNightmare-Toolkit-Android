@@ -172,7 +172,7 @@ fun HomeScreen(vm: PatcherViewModel) {
                 is UiState.Restoring -> ProgressCard("正在还原官方繁中…", s.logs)
                 is UiState.Restored -> DoneCard(
                     title = "已还原官方繁中",
-                    body = "三个文件已从备份恢复，manifest.ssra.prev 已移除。",
+                    body = "官方繁中三件套已从备份恢复，etag 身份记录已同步。",
                     actionText = "重新检测",
                     onAction = { vm.detect(context) },
                 )
@@ -327,7 +327,7 @@ private fun RestoreCard(enabled: Boolean, onRestore: () -> Unit) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SectionTitle("还原")
             Text(
-                "从 czn_backup_original/ 恢复官方繁中三件套，并移除 manifest.ssra.prev。",
+                "从 czn_backup_original/ 恢复官方繁中三件套（manifest.ssra / 繁中分卷 / etag）。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
