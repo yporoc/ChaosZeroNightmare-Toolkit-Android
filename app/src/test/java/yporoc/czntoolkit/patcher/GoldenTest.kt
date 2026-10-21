@@ -74,8 +74,14 @@ class GoldenTest {
         assertEquals(res.manifest.size.toString(), lines[3])
     }
 
+    /**
+     * 旧版这条测试的名字声称"与 PC 工具产物逐字节一致"，实测它的输入（backup_original）
+     * 与期望文件（zhcn_patch/产物）是同一份字节——判据与产物同源，结构上不可能失败。
+     * 那份备份还是"垫帧修复之前"的脏补丁产物（卷比官方大 768B，内容已是简体）。
+     * 现在改成真实闸门：内容已简体的树必须被拒绝构建，否则会把补丁当官方原件备份下来。
+     */
     @Test
-    fun `容器机制与 PC 工具产物逐字节一致`() {
+    fun `已简体化的树不允许被当成官方原件构建`() {
         val zhcn = zhcnRoot
         assumeTrue(zhcn != null && testData != null)
         val bak = File(zhcn, "backup_original")
@@ -88,12 +94,10 @@ class GoldenTest {
             File(bak, "manifest.ssra.etag.bak").readBytes(),
         )
         injectCompressor()
-        val res = SsraEngine.build(gameres) { }
-        // 该备份内容已是简体：转换为 0 是预期，产物应与 PC 工具在相同输入上的输出逐字节一致
-        assertEquals(0, res.stats.converted)
-        assertArrayEquals("manifest 与 PC 产物不一致", File(zhcn, "manifest.ssra").readBytes(), res.manifest)
-        assertArrayEquals("分卷与 PC 产物不一致", File(zhcn, SsraEngine.TARGET_PART).readBytes(), res.part)
-        assertSelfConsistent(res, gameres)
+        val r = runCatching { SsraEngine.build(gameres) { } }
+        assertTrue("从已简体化的树构建必须被拒绝，实得 ${r.exceptionOrNull()}", r.isFailure)
+        assertTrue("必须说明已无繁体可转: ${r.exceptionOrNull()?.message}",
+            (r.exceptionOrNull()?.message ?: "").contains("已无繁体可转"))
     }
 
     @Test
