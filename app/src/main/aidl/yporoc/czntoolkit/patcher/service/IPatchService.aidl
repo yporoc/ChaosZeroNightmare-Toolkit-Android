@@ -20,6 +20,9 @@ interface IPatchService {
     /** 从备份还原官方繁中。 */
     Bundle restore(String gameresPath);
 
+    /** 汉化状态读数；deep=true 才真解压文本库数残留（慢，由用户手动点）。 */
+    Bundle zhcnStatus(String gameresPath, boolean deep);
+
     /** 列出目录下的子目录（用于路径手选浏览器）。 */
     String[] listDirs(String parentPath);
 

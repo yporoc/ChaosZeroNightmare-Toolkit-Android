@@ -558,6 +558,149 @@ object SsraEngine {
     /** 相对路径扁平化成备份文件名（chunks/lang_zht_b03_0.ssrc -> chunks__lang_zht_b03_0.ssrc.bak）。 */
     private fun bakName(rel: String): String = rel.replace("/", "__") + ".bak"
 
+    // ───────────────────────── 汉化状态 ─────────────────────────
+
+    /** 六态读数。快路只比身份（几十毫秒，可以待在检测按钮里）；深扫才真解压数残留。 */
+    const val ST_MISSING = "资源未就绪"
+    const val ST_UNKNOWN = "未判定"
+    const val ST_OFFICIAL = "未汉化"
+    const val ST_PATCHED = "已汉化"
+    const val ST_STALE = "汉化失效"
+    const val ST_FOREIGN = "现场异常"
+
+    class ZhcnStatus(val state: String, val detail: String, val residual: Int = -1)
+
+    /** 备份根目录下所有带身份的补丁记录（tag -> identity）；残缺的单独回给调用方，不静默丢弃。 */
+    private fun identitiesOnDisk(gameres: File): Pair<LinkedHashMap<String, PatchIdentity>, List<String>> {
+        val out = LinkedHashMap<String, PatchIdentity>()
+        val bad = ArrayList<String>()
+        val root = File(gameres.parentFile, BACKUP_DIR)
+        root.listFiles { f -> f.isDirectory }?.sortedBy { it.name }?.forEach { d ->
+            val f = File(d, IDENTITY_FILE)
+            if (!f.isFile) return@forEach
+            runCatching { PatchIdentity.load(f) }
+                .onSuccess { out[d.name] = it }
+                .onFailure { bad.add("${d.name}（${it.message}）") }
+        }
+        return out to bad
+    }
+
+    /**
+     * 现场汉化状态。
+     *
+     * 判据是"清单身份 **和** 分卷身份双双对得上"才算已汉化或官方态：只看清单会被
+     * "更新器换回清单但卷没换"这类混合态骗过去，只看卷会被"我们写了卷没写清单"骗过去。
+     */
+    fun classify(gameres: File, deep: Boolean = false): ZhcnStatus {
+        if (!File(gameres, "manifest.ssra").isFile) {
+            return ZhcnStatus(ST_MISSING, "没有 manifest.ssra，资源未就绪或路径不对")
+        }
+        val man = try {
+            SsraManifest(gameres)
+        } catch (t: Throwable) {
+            return ZhcnStatus(ST_FOREIGN, "清单解析失败：${t.message}")
+        }
+        val rec = man.files.firstOrNull { it.name == TEXT_DB }
+            ?: return ZhcnStatus(ST_FOREIGN, "清单里找不到 $TEXT_DB（官方可能换了文本载体）")
+        val partName = runCatching { man.partNames[man.locateSegment(rec.grp, rec.off).k] }
+            .getOrElse { return ZhcnStatus(ST_FOREIGN, "无法定位 $TEXT_DB 所在分卷：${it.message}") }
+        val partF = File(gameres, "chunks/$partName")
+        if (!partF.isFile) {
+            return ZhcnStatus(ST_MISSING, "分卷 $partName 不在盘上，请先让游戏下完繁中资源")
+        }
+        val live = TreeIdentity.manifest(gameres) ?: return ZhcnStatus(ST_MISSING, "清单读不到")
+        val livePart = TreeIdentity.part(gameres, partName)
+            ?: return ZhcnStatus(ST_FOREIGN, "分卷 $partName 长度异常（不足 16 字节卷尾）")
+        val liveBuild = TreeIdentity.build(gameres)
+        val (idents, bad) = identitiesOnDisk(gameres)
+
+        // 深扫：真解压文本库、按本应用的词典复算还有多少条可转简。
+        // 这一步与身份记录无关，因为"身份说已汉化"恰恰是最需要用文本再验一遍的时候。
+        val residual: Int? = if (deep) {
+            val plain = runCatching { man.extract(rec, decrypt = true) }
+            val entries = plain.getOrNull()?.let { runCatching { TextDb.parse(it).entries }.getOrNull() }
+            if (entries == null) {
+                return ZhcnStatus(ST_FOREIGN, "深扫失败，读不回 $TEXT_DB 明文：${plain.exceptionOrNull()?.message}")
+            }
+            convertValues(entries, ConvertStats()).size
+        } else {
+            null
+        }
+
+        for ((tag, ident) in idents) {
+            val off = ident.official
+            val pat = ident.patched
+            if (partName != ident.part) {
+                return ZhcnStatus(
+                    ST_STALE,
+                    "$TEXT_DB 现在在 $partName 卷里，补丁记录的是 ${ident.part}——官方把繁中文本挪了卷，" +
+                        "重新点一次繁转简即可（$tag）",
+                )
+            }
+            val manOff = live == (off.manifestHash to off.manifestSize)
+            val manPat = live == (pat.manifestHash to pat.manifestSize)
+            val partOff = livePart == (off.partHash to off.partSize)
+            val partPat = livePart == (pat.partHash to pat.partSize)
+            if (manPat && partPat) {
+                if (residual != null && residual > 0) {
+                    return ZhcnStatus(
+                        ST_FOREIGN,
+                        "身份记录说已汉化，但按本应用词典复算还有 $residual 条可转简——补丁与文本不一致，" +
+                            "建议先还原再重新繁转简（$tag）",
+                        residual,
+                    )
+                }
+                return ZhcnStatus(
+                    ST_PATCHED,
+                    "已汉化（build ${ident.build}，${ident.textDb.converted} 条已转简，清单与分卷身份都对得上" +
+                        (if (residual == null) "）" else "，深扫残留 $residual 条）"),
+                    residual ?: -1,
+                )
+            }
+            if (manOff && partOff) {
+                return ZhcnStatus(
+                    ST_OFFICIAL,
+                    "官方态（build $liveBuild），还没汉化" +
+                        (if (residual == null) "" else "，深扫可转 $residual 条"),
+                    residual ?: -1,
+                )
+            }
+            if (ident.build != liveBuild) {
+                return ZhcnStatus(
+                    ST_STALE,
+                    "补丁是给 build ${ident.build} 做的，现场已是 build $liveBuild——资源更新把汉化冲掉了，" +
+                        "重新点一次繁转简即可（$tag）",
+                )
+            }
+            if (manOff && partPat) {
+                return ZhcnStatus(
+                    ST_FOREIGN,
+                    "清单是官方态但分卷还是补丁件（$partName）——按\"重新繁转简\"可自动纠正",
+                )
+            }
+            if (manPat && partOff) {
+                return ZhcnStatus(
+                    ST_FOREIGN,
+                    "清单还是补丁件但分卷已被换回官方（$partName）——汉化实际已失效，重新繁转简即可恢复",
+                )
+            }
+        }
+        val extra = if (bad.isEmpty()) "" else "；残缺的身份记录: $bad"
+        if (residual == null) {
+            return ZhcnStatus(
+                ST_UNKNOWN,
+                "build $liveBuild，本目录还没有可用的补丁身份记录，无法只凭清单判定" +
+                    "（点「手动检测」会真读一遍文本库数残留）$extra",
+            )
+        }
+        val entries = runCatching { TextDb.parse(man.extract(rec, decrypt = true)).entries.size }.getOrDefault(0)
+        return if (residual == 0) {
+            ZhcnStatus(ST_PATCHED, "build $liveBuild，文本已无繁体残留（$entries 条）", residual)
+        } else {
+            ZhcnStatus(ST_OFFICIAL, "build $liveBuild，还有 $residual 条是繁体待转简（共 $entries 条）", residual)
+        }
+    }
+
     // ───────────────────────── conversion ─────────────────────────
 
     internal fun convertValues(entries: List<TextDb.Entry>, stats: ConvertStats): Map<Int, ByteArray> {

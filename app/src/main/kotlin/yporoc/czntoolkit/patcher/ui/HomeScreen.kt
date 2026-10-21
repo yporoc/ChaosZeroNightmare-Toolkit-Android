@@ -49,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import yporoc.czntoolkit.patcher.FileCardView
 import yporoc.czntoolkit.patcher.PatcherViewModel
+import yporoc.czntoolkit.patcher.ZhcnStatusView
 import yporoc.czntoolkit.patcher.UiState
 import yporoc.czntoolkit.patcher.shizuku.ShizukuAvail
 import rikka.shizuku.Shizuku
@@ -61,6 +62,8 @@ private const val BROWSE_ROOT = "/storage/emulated/0/Android/data"
 fun HomeScreen(vm: PatcherViewModel) {
     val state by vm.state.collectAsState()
     val shizuku by vm.shizuku.collectAsState()
+    val zhcn by vm.zhcn.collectAsState()
+    val zhcnBusy by vm.zhcnBusy.collectAsState()
     val context = LocalContext.current
 
     var showPathDialog by remember { mutableStateOf(false) }
@@ -107,6 +110,13 @@ fun HomeScreen(vm: PatcherViewModel) {
                     onDismiss = { showPathDialog = false },
                 )
             }
+
+            ZhcnStatusCard(
+                view = zhcn,
+                busy = zhcnBusy,
+                canCheck = shizuku is ShizukuAvail.Ready,
+                onCheck = { vm.checkZhcn(context) },
+            )
 
             GameCard(
                 state = state,
@@ -212,6 +222,55 @@ fun HomeScreen(vm: PatcherViewModel) {
             },
             dismissButton = { TextButton(onClick = { showApplyConfirm = false }) { Text("取消") } },
         )
+    }
+}
+
+@Composable
+private fun ZhcnStatusCard(view: ZhcnStatusView?, busy: Boolean, canCheck: Boolean, onCheck: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SectionTitle("繁转简状态")
+                Spacer(Modifier.width(8.dp))
+                if (busy) CircularProgressIndicator(Modifier.size(14.dp))
+            }
+            when {
+                view == null -> Text(
+                    "尚未检测。点下方「手动检测」会真读一遍文本库并数出残留繁体条数（十秒级）。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                else -> {
+                    val settled = view.state != "判定中" && !busy
+                    Text(
+                        buildString {
+                            append(if (settled) "● " else "… ")
+                            append(view.state)
+                            append("（来源：${view.source}）")
+                        },
+                        fontWeight = FontWeight.SemiBold,
+                        color = when {
+                            !settled -> MaterialTheme.colorScheme.onSurfaceVariant
+                            view.state == "已汉化" || view.state == "未汉化" -> MaterialTheme.colorScheme.primary
+                            view.state == "未判定" -> MaterialTheme.colorScheme.onSurfaceVariant
+                            else -> MaterialTheme.colorScheme.error
+                        },
+                    )
+                    Text(
+                        view.detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (view.residual >= 0) {
+                        Text(
+                            "残留繁体条数（按本应用词典复算）：${view.residual}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+            OutlinedButton(onClick = onCheck, enabled = canCheck && !busy) { Text("手动检测繁转简状态") }
+        }
     }
 }
 
