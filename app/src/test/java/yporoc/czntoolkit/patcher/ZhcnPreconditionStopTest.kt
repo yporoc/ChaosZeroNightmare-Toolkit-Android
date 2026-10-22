@@ -11,11 +11,11 @@ import java.io.File
 import java.nio.file.Files
 
 /**
- * P2 的停机腿：官方把 text.db 挪卷、加后随条目、换封装方式、改帧头、或某档余量落不进帧头时，
+ * 停机腿：官方把 text.db 挪卷、加后随条目、换封装方式、改帧头、或某档余量落不进帧头时，
  * 工具必须带实测数字停下来并说清下一步，不许静默罢工、也不许硬垫出一个坏帧。
- * 每条毒都配一条成功腿，防止"闸门在坏自己身上把被测物报成坏了"。
+ * 每条都配一条对照成功腿，防止闸门自己坏了却把被测物报成不合格。
  */
-class ZhcnP2PoisonTest {
+class ZhcnPreconditionStopTest {
 
     private val testData = generateSequence(File(".").absoluteFile) { it.parentFile }
         .map { File(it, "testdata") }.firstOrNull { it.isDirectory }

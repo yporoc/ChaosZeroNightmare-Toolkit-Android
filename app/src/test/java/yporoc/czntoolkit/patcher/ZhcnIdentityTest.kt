@@ -13,7 +13,7 @@ import yporoc.czntoolkit.patcher.engine.ZstdCodec
 import java.io.File
 
 /**
- * P3 身份闸门的判据。核心事故场景：备份目录不带版本、"已存在就永不覆盖"，
+ * 身份闸门的判据。要防的事故场景：备份目录不带版本、"已存在就永不覆盖"，
  * 跨版本点还原会把旧 build 的清单与旧卷塞进新资源树（同一台手机上确实同时躺着 126 和 88）。
  */
 class ZhcnIdentityTest {

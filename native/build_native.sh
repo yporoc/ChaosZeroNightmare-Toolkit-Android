@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 用 Android NDK 编译 cznfast（bionic 版 zstd + JNI 壳），产物落到 app/src/main/jniLibs/。
 # 用法: ./build_native.sh <ndk路径> [API级别]
-# 示例: ./build_native.sh "C:/Android/ndk/27.2.12479018" 24
+# 示例: ./build_native.sh "<你的 NDK 目录>/27.2.12479018" 24
 set -e
 NDK="${1:?需要 NDK 路径}"
 API="${2:-24}"

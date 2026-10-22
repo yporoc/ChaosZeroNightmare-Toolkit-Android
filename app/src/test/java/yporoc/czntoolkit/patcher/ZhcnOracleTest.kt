@@ -14,15 +14,15 @@ import yporoc.czntoolkit.patcher.engine.ZstdCodec
 import java.io.File
 
 /**
- * 拿 PC 参考实现当**外部**判据（判据不与被测产物同源）。
+ * 外部判据：拿 PC 端工具在同一份官方资源上的读数来验，不拿产物自己证明产物。
  *
  * 夹具 `testdata/oracle_b126/` 是 PC 端 `ssra_zhcn.py`(main c3f9edb) 直接在手机那份
  * build 126 官方树上跑出来的读数：官方明文哈希、PC 产物明文哈希、以及两侧结论不同的
  * 117 条（全部是「乾」：PC 转成「干」，opencc4j 1.14.0 没转，因为它的单字表刻意不含「乾」，
  * 词组表这条路需要 optional 的 jieba）。
  *
- * 最硬的一条是第三条：把我们产物里这 117 条换成 PC 的值后重算哈希，必须**正好等于**
- * PC 产物的哈希——这等价于证明除这 117 条外两侧逐字节一致。
+ * 最后一条最硬：把我们产物里这 117 条换成 PC 的值后重算哈希，必须正好等于 PC 产物的
+ * 哈希，也就等于证明除这 117 条外两侧逐字节一致。
  */
 class ZhcnOracleTest {
 
