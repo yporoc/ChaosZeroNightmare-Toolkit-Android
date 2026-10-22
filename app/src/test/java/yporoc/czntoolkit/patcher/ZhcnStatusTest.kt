@@ -9,8 +9,8 @@ import yporoc.czntoolkit.patcher.engine.ZstdCodec
 import java.io.File
 
 /**
- * 汉化状态读数的判据。要点：没有补丁身份记录时**不许**猜"未汉化"，只能报"未判定"——
- * 猜错的方向是"用户以为没生效而反复点"，代价比多一次点击大得多。
+ * 汉化状态读数。没有补丁身份记录时不猜"未汉化"，只报"未判定"：
+ * 猜错会让用户以为没生效而反复点，代价比多点一次大。
  */
 class ZhcnStatusTest {
 
@@ -94,13 +94,13 @@ class ZhcnStatusTest {
             build=88
             context=pack-88-e8a4e49e3a1e
             part=lang_zht_b03_0.ssrc
-            official.manifest=1111111111111111111
+            official.manifest=1001
             official.manifestSize=7506387
-            official.part=2222222222222222222
+            official.part=1002
             official.partSize=24399744
-            patched.manifest=3333333333333333333
+            patched.manifest=1003
             patched.manifestSize=7506387
-            patched.part=4444444444444444444
+            patched.part=1004
             patched.partSize=24399744
             textDb.converted=97497
             """.trimIndent(), Charsets.UTF_8,
