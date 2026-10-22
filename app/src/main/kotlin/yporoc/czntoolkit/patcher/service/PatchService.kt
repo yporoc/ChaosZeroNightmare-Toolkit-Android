@@ -12,7 +12,7 @@ import java.io.File
 private const val TAG = "CZN"
 
 /** 构建指纹：日志中出现它即证明服务进程运行的是本次推送的新代码。 */
-const val BUILD_ID = "0.0.2-beta"
+const val BUILD_ID = "0.0.2"
 
 /**
  * Shizuku UserService 实现：以 shell UID 运行，直接读写游戏的 Android/data 目录。
