@@ -28,9 +28,21 @@ data class FileCardView(
     val good: Boolean,
 )
 
+data class ZhcnStatusView(
+    val state: String,
+    val detail: String,
+    /** -1 表示没数过（快路不解压文本库）。 */
+    val residual: Int,
+    /** 这条读数从哪来：「检测」快路 / 「手动检测」深扫。 */
+    val source: String,
+)
+
 data class DetectView(
     val path: String,
     val cards: List<FileCardView>,
+    val partName: String,
+    val zhState: String,
+    val zhDetail: String,
     val manifestOk: Boolean,
     val manifestError: String?,
     val build: Long,
@@ -67,6 +79,12 @@ class PatcherViewModel : ViewModel() {
 
     val logs = MutableStateFlow<List<String>>(emptyList())
     val path = MutableStateFlow(DEFAULT_PATH)
+
+    private val _zhcn = MutableStateFlow<ZhcnStatusView?>(null)
+    val zhcn: StateFlow<ZhcnStatusView?> = _zhcn.asStateFlow()
+
+    private val _zhcnBusy = MutableStateFlow(false)
+    val zhcnBusy: StateFlow<Boolean> = _zhcnBusy.asStateFlow()
 
     private var service: IPatchService? = null
     private var conn: ServiceConnection? = null
@@ -127,7 +145,9 @@ class PatcherViewModel : ViewModel() {
         try {
             val b = withService(context) { it.detect(target) }
             check(b.getBoolean(DetectKeys.OK)) { b.getString(DetectKeys.ERROR) ?: "检测失败" }
-            _state.value = UiState.Detected(toView(b), target)
+            val view = toView(b)
+            _zhcn.value = ZhcnStatusView(view.zhState, view.zhDetail, b.getInt(DetectKeys.ZH_RESIDUAL, -1), "检测")
+            _state.value = UiState.Detected(view, target)
         } catch (t: Throwable) {
             android.util.Log.e("CZN", "ui detect failed", t)
             _state.value = UiState.Failed(t.message ?: t.toString(), logs.value)
@@ -183,6 +203,29 @@ class PatcherViewModel : ViewModel() {
         }
     }
 
+    /** 手动深扫：真解压 text.db 用 opencc4j 复算残留繁体条数，慢（十秒级），只在用户点时跑。 */
+    fun checkZhcn(context: Context) = viewModelScope.launch {
+        if (_zhcnBusy.value) return@launch
+        _zhcnBusy.value = true
+        val cur = _zhcn.value
+        _zhcn.value = ZhcnStatusView(cur?.state ?: "判定中", "正在深扫文本库（解压 text.db 并逐条复算），请稍候…", -1, "手动检测")
+        try {
+            val b = withService(context) { it.zhcnStatus(path.value, true) }
+            check(b.getBoolean(DetectKeys.OK)) { b.getString(DetectKeys.ERROR) ?: "状态检测失败" }
+            _zhcn.value = ZhcnStatusView(
+                b.getString(DetectKeys.ZH_STATE) ?: SsraEngine.ST_UNKNOWN,
+                b.getString(DetectKeys.ZH_DETAIL) ?: "",
+                b.getInt(DetectKeys.ZH_RESIDUAL, -1),
+                "手动检测",
+            )
+        } catch (t: Throwable) {
+            android.util.Log.e("CZN", "ui checkZhcn failed", t)
+            _zhcn.value = ZhcnStatusView(SsraEngine.ST_UNKNOWN, "深扫失败：${t.message ?: t.toString()}", -1, "手动检测")
+        } finally {
+            _zhcnBusy.value = false
+        }
+    }
+
     suspend fun browse(context: Context, parent: String): List<String> = try {
         withService(context) { it.listDirs(parent).toList() }
     } catch (t: Throwable) {
@@ -201,6 +244,7 @@ class PatcherViewModel : ViewModel() {
         fun sg(k: String) = b.getString(k)
         val ready = bl(DetectKeys.MANIFEST_OK) && bl(DetectKeys.TEXTDB_FOUND) &&
             bl(DetectKeys.WRITE_OK) && bl(DetectKeys.ETAG_EXISTS)
+        val partName = sg(DetectKeys.PART_NAME).orEmpty().ifEmpty { SsraEngine.TARGET_PART }
         val cards = listOf(
             FileCardView(
                 label = "资源清单", rel = "manifest.ssra",
@@ -213,12 +257,13 @@ class PatcherViewModel : ViewModel() {
                 good = bl(DetectKeys.MANIFEST_OK),
             ),
             FileCardView(
-                label = "语言分卷", rel = "chunks/${SsraEngine.TARGET_PART}",
+                label = "语言分卷", rel = "chunks/$partName",
                 exists = bl(DetectKeys.PART_EXISTS), size = b.getLong(DetectKeys.PART_SIZE),
                 note = when {
-                    !bl(DetectKeys.TEXTDB_FOUND) -> sg(DetectKeys.TEXTDB_PART)
-                        ?.let { "text.db 在 $it，非目标分卷" } ?: "未定位到 text.db"
-                    else -> "text.db 定位成功 · footer " + if (bl(DetectKeys.PART_FOOTER_OK)) "校验通过" else "校验失败"
+                    !bl(DetectKeys.TEXTDB_FOUND) -> "清单推导出的卷 ${sg(DetectKeys.TEXTDB_PART) ?: partName} 不在盘上，" +
+                        "请先启动游戏把繁中资源下完"
+                    else -> "text.db 定位成功（卷名按清单推导）· footer " +
+                        if (bl(DetectKeys.PART_FOOTER_OK)) "校验通过" else "校验失败"
                 },
                 good = bl(DetectKeys.TEXTDB_FOUND) && bl(DetectKeys.PART_FOOTER_OK),
             ),
@@ -232,6 +277,9 @@ class PatcherViewModel : ViewModel() {
         return DetectView(
             path = sg(DetectKeys.PATH) ?: "",
             cards = cards,
+            partName = partName,
+            zhState = sg(DetectKeys.ZH_STATE) ?: SsraEngine.ST_UNKNOWN,
+            zhDetail = sg(DetectKeys.ZH_DETAIL) ?: "",
             manifestOk = bl(DetectKeys.MANIFEST_OK),
             manifestError = sg(DetectKeys.MANIFEST_ERROR),
             build = b.getLong(DetectKeys.BUILD),

@@ -7,7 +7,6 @@ import yporoc.czntoolkit.patcher.engine.Xxh64
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
@@ -19,18 +18,22 @@ import java.nio.file.Files
  */
 class GoldenTest {
 
-    private val zhcnRoot = sequenceOf(
-        System.getenv("CZN_ZHCN_ROOT"),
-        "../ChaosZero-Toolkit-Extra/zhcn_patch",
-        "../../czn/ChaosZero-Toolkit-Extra/zhcn_patch",
-        "../../../czn/ChaosZero-Toolkit-Extra/zhcn_patch",
-    ).firstOrNull { it != null && File(it).isDirectory }?.let(::File)
+    /**
+     * 向上走目录找参照/测试数据，找不到就直接失败。
+     * 原来这里是固定相对层级 + assumeTrue：仓库被放深一层时两条测试会静默跳过，
+     * 构建照样 BUILD SUCCESSFUL 却什么都没测。黄金测试用的手机资源是 gitignore 的
+     * 本地数据，缺了必须说明，不能当成通过。
+     */
+    private fun walkUp(name: (File) -> File): File =
+        generateSequence(File(".").absoluteFile) { it.parentFile }
+            .map(name).firstOrNull { it.isDirectory }
+            ?: error("缺少本地测试参照数据：请在某级父目录放 testdata/（手机资源）与 czn/ChaosZero-Toolkit-Extra/zhcn_patch（PC 产物）")
 
-    private val testData = sequenceOf(
-        File("testdata"),
-        File("../testdata"),
-        File("../../testdata"),
-    ).firstOrNull { it.isDirectory }
+    private val zhcnRoot: File = System.getenv("CZN_ZHCN_ROOT")?.let { File(it) }
+        .takeIf { it != null && it.isDirectory }
+        ?: walkUp { File(it, "czn/ChaosZero-Toolkit-Extra/zhcn_patch") }
+
+    private val testData: File = walkUp { File(it, "testdata") }
 
     private fun makeGameres(root: File, manifest: ByteArray, part: ByteArray, etag: ByteArray): File {
         val gameres = File(root, "gameres")
@@ -43,19 +46,12 @@ class GoldenTest {
 
     /** PC 端注入 zstd-jni（Windows .so）压缩器；真机由服务注入 cznfast（bionic zstd）。同为标准 zstd 帧。 */
     private fun injectCompressor() {
-        ZstdCodec.compress = { data, maxSize -> compressWithLevels(data, maxSize) }
+        ZstdCodec.compressAtLevel = { data, level -> com.github.luben.zstd.Zstd.compress(data, level) }
         ZstdCodec.decompress = { blob, maxOut ->
             com.github.luben.zstd.ZstdInputStream(java.io.ByteArrayInputStream(blob)).use { it.readNBytes(maxOut) }
         }
     }
 
-    private fun compressWithLevels(data: ByteArray, maxSize: Int): ByteArray {
-        for (lvl in intArrayOf(3, 6, 9, 12, 16, 19)) {
-            val c = com.github.luben.zstd.Zstd.compress(data, lvl)
-            if (c.size <= maxSize) return c
-        }
-        throw IllegalStateException("所有压缩级别均超过原帧尺寸（maxSize=$maxSize）")
-    }
 
     private fun assertSelfConsistent(res: SsraEngine.BuildResult, gameres: File) {
         // 分卷 footer：SSRC + 卷号 + XXH64(payload)
@@ -81,12 +77,16 @@ class GoldenTest {
         assertEquals(res.manifest.size.toString(), lines[3])
     }
 
+    /**
+     * 旧版这条测试的名字声称"与 PC 工具产物逐字节一致"，实测它的输入（backup_original）
+     * 与期望文件（zhcn_patch/产物）是同一份字节——判据与产物同源，结构上不可能失败。
+     * 那份备份还是"垫帧修复之前"的脏补丁产物（卷比官方大 768B，内容已是简体）。
+     * 现在改成真实闸门：内容已简体的树必须被拒绝构建，否则会把补丁当官方原件备份下来。
+     */
     @Test
-    fun `容器机制与 PC 工具产物逐字节一致`() {
-        val zhcn = zhcnRoot
-        assumeTrue(zhcn != null && testData != null)
-        val bak = File(zhcn, "backup_original")
-        assumeTrue(File(bak, "manifest.ssra.bak").isFile)
+    fun `已简体化的树不允许被当成官方原件构建`() {
+        val bak = File(zhcnRoot, "backup_original")
+        check(File(bak, "manifest.ssra.bak").isFile) { "缺 PC 参照备份: ${bak.absolutePath}" }
         val tmp = Files.createTempDirectory("czn-pc").toFile()
         val gameres = makeGameres(
             tmp,
@@ -95,19 +95,16 @@ class GoldenTest {
             File(bak, "manifest.ssra.etag.bak").readBytes(),
         )
         injectCompressor()
-        val res = SsraEngine.build(gameres) { }
-        // 该备份内容已是简体：转换为 0 是预期，产物应与 PC 工具在相同输入上的输出逐字节一致
-        assertEquals(0, res.stats.converted)
-        assertArrayEquals("manifest 与 PC 产物不一致", File(zhcn, "manifest.ssra").readBytes(), res.manifest)
-        assertArrayEquals("分卷与 PC 产物不一致", File(zhcn, SsraEngine.TARGET_PART).readBytes(), res.part)
-        assertSelfConsistent(res, gameres)
+        val r = runCatching { SsraEngine.build(gameres) { } }
+        assertTrue("从已简体化的树构建必须被拒绝，实得 ${r.exceptionOrNull()}", r.isFailure)
+        assertTrue("必须说明已无繁体可转: ${r.exceptionOrNull()?.message}",
+            (r.exceptionOrNull()?.message ?: "").contains("已无繁体可转"))
     }
 
     @Test
     fun `官方繁中数据真实转换并满足全部铁律`() {
-        assumeTrue(testData != null)
         val phone = File(testData, "phone_gameres")
-        assumeTrue(File(phone, "manifest.ssra").isFile)
+        check(File(phone, "manifest.ssra").isFile) { "缺 build 88 样本: ${phone.absolutePath}" }
         val tmp = Files.createTempDirectory("czn-phone").toFile()
         val gameres = makeGameres(
             tmp,

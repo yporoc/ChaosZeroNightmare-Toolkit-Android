@@ -9,15 +9,15 @@ object ZstdCodec {
     @Volatile
     var decompress: ((blob: ByteArray, maxOut: Int) -> ByteArray)? = null
 
-    /** 压缩：参数 (数据, 最大输出)，返回标准 zstd 帧。 */
+    /** 压缩：参数 (数据, 档位)，返回标准 zstd 帧。档位与余量规则由 SsraEngine 持有。 */
     @Volatile
-    var compress: ((data: ByteArray, maxSize: Int) -> ByteArray)? = null
+    var compressAtLevel: ((data: ByteArray, level: Int) -> ByteArray)? = null
 
     fun requireDecompress(): (ByteArray, Int) -> ByteArray =
         checkNotNull(decompress) { "未注入 zstd 解压器" }
 
-    fun requireCompress(): (ByteArray, Int) -> ByteArray =
-        checkNotNull(compress) { "未注入 zstd 压缩器" }
+    fun requireCompressAtLevel(): (ByteArray, Int) -> ByteArray =
+        checkNotNull(compressAtLevel) { "未注入 zstd 压缩器" }
 }
 
 /** 小端序字节读写工具（对应 Python struct '<...'）。 */
@@ -128,8 +128,16 @@ class SsraManifest(gameres: File) {
     fun record(name: String): FileRec =
         files.firstOrNull { it.name == name } ?: error("manifest 中不存在条目: $name")
 
-    fun segmentContaining(grp: Int, off: Long): Seg =
-        groupSegs.getValue(grp).first { off >= it.start && off < it.end }
+    fun segmentContaining(grp: Int, off: Long): Seg = locateSegment(grp, off)
+
+    /** 按清单推导起点所在分卷；落点数不是 1 就报实测数字，不猜。 */
+    fun locateSegment(grp: Int, off: Long): Seg {
+        val hits = groupSegs.getValue(grp).filter { it.start <= off && off < it.end }
+        if (hits.size != 1) {
+            error("目标起点 off=$off 在组 grp=$grp 里落在 ${hits.size} 个分卷中，无法定位目标卷")
+        }
+        return hits[0]
+    }
 
     fun segmentOfPart(grp: Int, k: Int): Seg =
         groupSegs.getValue(grp).first { it.k == k }

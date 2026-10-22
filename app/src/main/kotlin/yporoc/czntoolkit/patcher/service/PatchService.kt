@@ -12,7 +12,7 @@ import java.io.File
 private const val TAG = "CZN"
 
 /** 构建指纹：日志中出现它即证明服务进程运行的是本次推送的新代码。 */
-const val BUILD_ID = "0.0.1beta"
+const val BUILD_ID = "0.0.2beta-b126"
 
 /**
  * Shizuku UserService 实现：以 shell UID 运行，直接读写游戏的 Android/data 目录。
@@ -65,15 +65,39 @@ class PatchService : IPatchService.Stub {
             putBoolean(DetectKeys.PART_FOOTER_OK, info.partFooterOk)
             putBoolean(DetectKeys.WRITE_OK, info.writeOk)
             putBoolean(DetectKeys.BACKUP_EXISTS, info.backupExists)
+            putString(DetectKeys.PART_NAME, info.partName)
+            // 快路状态：只比清单/分卷/备份身份，不解压文本库
+            val zh = runCatching { SsraEngine.classify(File(checkNotNull(gameresPath))) }
+            putString(DetectKeys.ZH_STATE, zh.getOrNull()?.state ?: SsraEngine.ST_UNKNOWN)
+            putString(DetectKeys.ZH_DETAIL, zh.getOrNull()?.detail ?: "状态判定失败：${zh.exceptionOrNull()?.message}")
+            putInt(DetectKeys.ZH_RESIDUAL, zh.getOrNull()?.residual ?: -1)
         }
     } catch (t: Throwable) {
         errorBundle("detect", t)
     }
 
+    override fun zhcnStatus(gameresPath: String?, deep: Boolean): Bundle = try {
+        Log.i(TAG, "zhcnStatus start [$BUILD_ID] deep=$deep: $gameresPath")
+        // 深扫要解压 zstd 帧，先确保 cznfast 已加载并注入
+        CznZstd.load()
+        ZstdCodec.compressAtLevel = { data, level -> CznZstd.compressAtLevel(data, level) }
+        ZstdCodec.decompress = { blob, maxOut -> CznZstd.decompress(blob, maxOut) }
+        val out = SsraEngine.classify(File(checkNotNull(gameresPath)), deep)
+        Log.i(TAG, "zhcnStatus ok: ${out.state} / ${out.detail}")
+        Bundle().apply {
+            putBoolean(DetectKeys.OK, true)
+            putString(DetectKeys.ZH_STATE, out.state)
+            putString(DetectKeys.ZH_DETAIL, out.detail)
+            putInt(DetectKeys.ZH_RESIDUAL, out.residual)
+        }
+    } catch (t: Throwable) {
+        errorBundle("zhcnStatus", t)
+    }
+
     override fun build(gameresPath: String?, onLog: IProgressCallback?): Bundle = try {
         Log.i(TAG, "build start [$BUILD_ID]: $gameresPath")
         CznZstd.load()
-        ZstdCodec.compress = { data, maxSize -> CznZstd.compressWithLimit(data, maxSize) }
+        ZstdCodec.compressAtLevel = { data, level -> CznZstd.compressAtLevel(data, level) }
         ZstdCodec.decompress = { blob, maxOut -> CznZstd.decompress(blob, maxOut) }
         Log.i(TAG, "cznfast (bionic zstd) loaded")
         val res = SsraEngine.build(File(checkNotNull(gameresPath))) { line ->
