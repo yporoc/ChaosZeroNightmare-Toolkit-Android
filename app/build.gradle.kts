@@ -20,7 +20,7 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = 4
-        versionName = "0.0.2-beta"
+        versionName = "0.0.2"
         ndk {
             // zstd-jni 原生库：真机 arm64 + 模拟器 x86_64
             abiFilters += listOf("arm64-v8a", "x86_64")
