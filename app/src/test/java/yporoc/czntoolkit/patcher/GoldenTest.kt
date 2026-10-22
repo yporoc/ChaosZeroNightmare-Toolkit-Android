@@ -7,7 +7,6 @@ import yporoc.czntoolkit.patcher.engine.Xxh64
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
@@ -19,18 +18,22 @@ import java.nio.file.Files
  */
 class GoldenTest {
 
-    private val zhcnRoot = sequenceOf(
-        System.getenv("CZN_ZHCN_ROOT"),
-        "../ChaosZero-Toolkit-Extra/zhcn_patch",
-        "../../czn/ChaosZero-Toolkit-Extra/zhcn_patch",
-        "../../../czn/ChaosZero-Toolkit-Extra/zhcn_patch",
-    ).firstOrNull { it != null && File(it).isDirectory }?.let(::File)
+    /**
+     * 向上走目录找参照/测试数据，找不到就直接失败。
+     * 原来这里是固定相对层级 + assumeTrue：仓库被放深一层时两条测试会静默跳过，
+     * 构建照样 BUILD SUCCESSFUL 却什么都没测。黄金测试用的手机资源是 gitignore 的
+     * 本地数据，缺了必须说明，不能当成通过。
+     */
+    private fun walkUp(name: (File) -> File): File =
+        generateSequence(File(".").absoluteFile) { it.parentFile }
+            .map(name).firstOrNull { it.isDirectory }
+            ?: error("缺少本地测试参照数据：请在某级父目录放 testdata/（手机资源）与 czn/ChaosZero-Toolkit-Extra/zhcn_patch（PC 产物）")
 
-    private val testData = sequenceOf(
-        File("testdata"),
-        File("../testdata"),
-        File("../../testdata"),
-    ).firstOrNull { it.isDirectory }
+    private val zhcnRoot: File = System.getenv("CZN_ZHCN_ROOT")?.let { File(it) }
+        .takeIf { it != null && it.isDirectory }
+        ?: walkUp { File(it, "czn/ChaosZero-Toolkit-Extra/zhcn_patch") }
+
+    private val testData: File = walkUp { File(it, "testdata") }
 
     private fun makeGameres(root: File, manifest: ByteArray, part: ByteArray, etag: ByteArray): File {
         val gameres = File(root, "gameres")
@@ -82,10 +85,8 @@ class GoldenTest {
      */
     @Test
     fun `已简体化的树不允许被当成官方原件构建`() {
-        val zhcn = zhcnRoot
-        assumeTrue(zhcn != null && testData != null)
-        val bak = File(zhcn, "backup_original")
-        assumeTrue(File(bak, "manifest.ssra.bak").isFile)
+        val bak = File(zhcnRoot, "backup_original")
+        check(File(bak, "manifest.ssra.bak").isFile) { "缺 PC 参照备份: ${bak.absolutePath}" }
         val tmp = Files.createTempDirectory("czn-pc").toFile()
         val gameres = makeGameres(
             tmp,
@@ -102,9 +103,8 @@ class GoldenTest {
 
     @Test
     fun `官方繁中数据真实转换并满足全部铁律`() {
-        assumeTrue(testData != null)
         val phone = File(testData, "phone_gameres")
-        assumeTrue(File(phone, "manifest.ssra").isFile)
+        check(File(phone, "manifest.ssra").isFile) { "缺 build 88 样本: ${phone.absolutePath}" }
         val tmp = Files.createTempDirectory("czn-phone").toFile()
         val gameres = makeGameres(
             tmp,
